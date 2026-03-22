@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Cpu, Wrench, Globe, CloudRain, Newspaper, Clock, ScanLine, LineChart, GraduationCap, Mail, Inbox } from 'lucide-react';
+import { Send, Cpu, Wrench, Globe, CloudRain, Newspaper, Clock, ScanLine, LineChart, GraduationCap, Mail, Inbox, Zap, MessageSquare, Brain } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -39,6 +39,7 @@ export default function ChatPage() {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [chatMode, setChatMode] = useState<'fast' | 'normal' | 'deep'>('normal');
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -67,31 +68,85 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
-      // Gather last 3 messages for context awareness
-      const last3Messages = messages.slice(-3).map(m => ({ role: m.role, content: m.content }));
+      // Gather messages for context awareness based on selected mode
+      let historyToSend: { role: string, content: string }[] = [];
+      if (chatMode === 'fast') {
+        historyToSend = []; // Send no previous contextual messages
+      } else if (chatMode === 'normal') {
+        historyToSend = messages.slice(-2).map(m => ({ role: m.role, content: m.content })); // 1 previous interaction pair
+      } else if (chatMode === 'deep') {
+        historyToSend = messages.slice(-10).map(m => ({ role: m.role, content: m.content })); // Up to 5 previous pairs
+      }
 
       const response = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           query: userMessage.content,
-          history: last3Messages,
-          google_credentials: googleCredentials
+          history: historyToSend,
+          google_credentials: googleCredentials,
+          mode: chatMode
         }),
       });
 
       if (!response.ok) throw new Error('Network response was not ok');
+      if (!response.body) throw new Error('No response body');
 
-      const data = await response.json();
+      const assistantId = (Date.now() + 1).toString();
       
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: data.response || "No response generated.",
-        tools_used: data.tools_used || [],
-      };
+      // Seed empty assistant message to stream into
+      setMessages((prev) => [
+        ...prev, 
+        { id: assistantId, role: 'assistant', content: '', tools_used: [] }
+      ]);
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let done = false;
+      let buffer = '';
+
+      while (!done) {
+        const { value, done: readerDone } = await reader.read();
+        done = readerDone;
+        if (value) {
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // Keep the incomplete line in the buffer for the next chunk
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6).trim();
+              if (!dataStr) continue;
+              
+              try {
+                const parsed = JSON.parse(dataStr);
+                
+                if (parsed.type === 'token') {
+                  setMessages(prev => prev.map(msg => 
+                    msg.id === assistantId 
+                      ? { ...msg, content: msg.content + parsed.content }
+                      : msg
+                  ));
+                } else if (parsed.type === 'tool') {
+                  setMessages(prev => prev.map(msg => 
+                    msg.id === assistantId 
+                      ? { ...msg, tools_used: [...(msg.tools_used || []), parsed.name] }
+                      : msg
+                  ));
+                } else if (parsed.type === 'error') {
+                   setMessages(prev => prev.map(msg => 
+                    msg.id === assistantId 
+                      ? { ...msg, content: msg.content + '\n\n**Error:** ' + parsed.content }
+                      : msg
+                  ));
+                }
+              } catch (e) {
+                console.error("Error parsing SSE JSON:", dataStr, e);
+              }
+            }
+          }
+        }
+      }
     } catch (error) {
       console.error('Error fetching chat response:', error);
       const errorMessage: Message = {
@@ -230,8 +285,48 @@ export default function ChatPage() {
           </div>
         </div>
         
-        <div className="p-4 bg-[#0a0a0a] border-t border-white/5 shrink-0">
-          <form onSubmit={handleSubmit} className="flex items-center gap-3 max-w-4xl mx-auto">
+        <div className="p-4 bg-[#0a0a0a] border-t border-white/5 shrink-0 flex flex-col gap-3">
+          {/* Mode Selector */}
+          <div className="flex items-center justify-center gap-2 max-w-4xl mx-auto w-full">
+            <button
+              type="button"
+              onClick={() => setChatMode('fast')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                chatMode === 'fast' 
+                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' 
+                  : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800 border border-transparent'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              Quick Reply
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatMode('normal')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                chatMode === 'normal' 
+                  ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' 
+                  : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800 border border-transparent'
+              }`}
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              Standard
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatMode('deep')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${
+                chatMode === 'deep' 
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                  : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800 border border-transparent'
+              }`}
+            >
+              <Brain className="w-3.5 h-3.5" />
+              Deep Research
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmit} className="flex items-center gap-3 max-w-4xl mx-auto w-full">
             <Input
               value={input}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
