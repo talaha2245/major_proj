@@ -39,7 +39,7 @@ export default function ChatPage() {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [chatMode, setChatMode] = useState<'fast' | 'normal' | 'deep'>('normal');
+  const [chatMode, setChatMode] = useState<'fast' | 'normal' | 'deep'>('fast');
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -78,7 +78,9 @@ export default function ChatPage() {
         historyToSend = messages.slice(-10).map(m => ({ role: m.role, content: m.content })); // Up to 5 previous pairs
       }
 
-      const response = await fetch('http://localhost:8000/api/chat', {
+      // https://myapp-backend-2-p1nh.onrender.com
+      // http://localhost:8000
+      const response = await fetch('https://myapp-backend-2-p1nh.onrender.com/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
