@@ -1,0 +1,221 @@
+diff --git a/frontend/src/pages/ChatPage.tsx b/frontend/src/pages/ChatPage.tsx
+index 1861085..5b4ef7c 100644
+--- a/frontend/src/pages/ChatPage.tsx
++++ b/frontend/src/pages/ChatPage.tsx
+@@ -1,12 +1,14 @@
+-import { useState, useRef, useEffect } from 'react';
++import { useState, useRef, useEffect, useCallback } from 'react';
+ import { Button } from '@/components/ui/button';
+ import { Input } from '@/components/ui/input';
+-import { Send, Cpu, Wrench, Globe, CloudRain, Newspaper, Clock, ScanLine, LineChart, GraduationCap, Mail, Inbox } from 'lucide-react';
++import { Send, Cpu, Wrench, Globe, CloudRain, Newspaper, Clock, ScanLine, LineChart, GraduationCap, Mail, Inbox, Mic, MicOff, Volume2, VolumeX, Square } from 'lucide-react';
+ import { motion, AnimatePresence } from 'framer-motion';
+ import ReactMarkdown from 'react-markdown';
+ import remarkGfm from 'remark-gfm';
+ import { useAtomValue } from 'jotai';
+ import { userAtom, googleCredentialsAtom } from '@/store';
++import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
++import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
+ 
+ export interface Message {
+   id: string;
+@@ -39,12 +41,33 @@ export default function ChatPage() {
+   ]);
+   const [input, setInput] = useState('');
+   const [isLoading, setIsLoading] = useState(false);
++  const [voiceReplyEnabled, setVoiceReplyEnabled] = useState(true);
+   const scrollContainerRef = useRef<HTMLDivElement>(null);
+ 
++  // Voice hooks
++  const { speak, stop: stopSpeaking, isSpeaking, isSupported: ttsSupported } = useSpeechSynthesis();
++
++  const handleSpeechResult = useCallback((transcript: string) => {
++    setInput(prev => (prev ? prev + ' ' : '') + transcript);
++  }, []);
++
++  const handleInterimResult = useCallback((_interimText: string) => {
++    // Interim results update is optional — final result is what matters
++  }, []);
++
++  const {
++    isListening,
++    isSupported: sttSupported,
++    error: sttError,
++    startListening,
++    stopListening,
++  } = useSpeechRecognition({
++    onResult: handleSpeechResult,
++    onInterim: handleInterimResult,
++  });
++
+   useEffect(() => {
+     if (scrollContainerRef.current) {
+-      // Direct scrollTo strictly targets this container, preventing the browser 
+-      // from attempting to shift the entire parent window up to meet an element.
+       scrollContainerRef.current.scrollTo({
+         top: scrollContainerRef.current.scrollHeight,
+         behavior: 'smooth'
+@@ -56,6 +79,16 @@ export default function ChatPage() {
+     e.preventDefault();
+     if (!input.trim() || isLoading) return;
+ 
++    // Stop listening if currently recording
++    if (isListening) {
++      stopListening();
++    }
++
++    // Stop any ongoing TTS
++    if (isSpeaking) {
++      stopSpeaking();
++    }
++
+     const userMessage: Message = {
+       id: Date.now().toString(),
+       role: 'user',
+@@ -67,7 +100,6 @@ export default function ChatPage() {
+     setIsLoading(true);
+ 
+     try {
+-      // Gather last 3 messages for context awareness
+       const last3Messages = messages.slice(-3).map(m => ({ role: m.role, content: m.content }));
+ 
+       const response = await fetch('http://localhost:8000/api/chat', {
+@@ -92,6 +124,11 @@ export default function ChatPage() {
+       };
+ 
+       setMessages((prev) => [...prev, assistantMessage]);
++
++      // Speak the assistant response if voice reply is enabled
++      if (voiceReplyEnabled && ttsSupported && assistantMessage.content) {
++        speak(assistantMessage.content);
++      }
+     } catch (error) {
+       console.error('Error fetching chat response:', error);
+       const errorMessage: Message = {
+@@ -105,6 +142,14 @@ export default function ChatPage() {
+     }
+   };
+ 
++  const toggleMic = () => {
++    if (isListening) {
++      stopListening();
++    } else {
++      startListening();
++    }
++  };
++
+   return (
+     <motion.div 
+       key="chat"
+@@ -230,12 +275,109 @@ export default function ChatPage() {
+           </div>
+         </div>
+         
++        {/* Voice Status Bar */}
++        <AnimatePresence>
++          {(isListening || sttError || isSpeaking) && (
++            <motion.div
++              initial={{ height: 0, opacity: 0 }}
++              animate={{ height: 'auto', opacity: 1 }}
++              exit={{ height: 0, opacity: 0 }}
++              transition={{ duration: 0.2 }}
++              className="px-4 border-t border-white/5 overflow-hidden"
++            >
++              <div className="flex items-center gap-3 py-2.5 text-sm">
++                {isListening && (
++                  <div className="flex items-center gap-2 text-red-400">
++                    <span className="relative flex h-2.5 w-2.5">
++                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
++                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
++                    </span>
++                    <span className="font-medium">Listening...</span>
++                    <span className="text-zinc-500 text-xs">Speak now, then click mic to stop</span>
++                  </div>
++                )}
++                {sttError && (
++                  <div className="flex items-center gap-2 text-amber-400">
++                    <span className="text-xs">⚠</span>
++                    <span className="text-xs">{sttError}</span>
++                  </div>
++                )}
++                {isSpeaking && (
++                  <div className="flex items-center gap-2 text-emerald-400">
++                    <div className="flex items-end gap-0.5 h-3">
++                      <span className="w-0.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: '40%', animationDelay: '0ms' }} />
++                      <span className="w-0.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: '80%', animationDelay: '150ms' }} />
++                      <span className="w-0.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: '60%', animationDelay: '300ms' }} />
++                      <span className="w-0.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: '100%', animationDelay: '450ms' }} />
++                      <span className="w-0.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: '50%', animationDelay: '600ms' }} />
++                    </div>
++                    <span className="font-medium text-xs">Speaking response...</span>
++                  </div>
++                )}
++              </div>
++            </motion.div>
++          )}
++        </AnimatePresence>
++
++        {/* Input Bar */}
+         <div className="p-4 bg-[#0a0a0a] border-t border-white/5 shrink-0">
+-          <form onSubmit={handleSubmit} className="flex items-center gap-3 max-w-4xl mx-auto">
++          <form onSubmit={handleSubmit} className="flex items-center gap-2 max-w-4xl mx-auto">
++            {/* Voice Reply Toggle */}
++            {ttsSupported && (
++              <Button
++                type="button"
++                onClick={() => {
++                  if (voiceReplyEnabled && isSpeaking) {
++                    stopSpeaking();
++                  }
++                  setVoiceReplyEnabled(prev => !prev);
++                }}
++                title={voiceReplyEnabled ? 'Voice replies ON — click to mute' : 'Voice replies OFF — click to enable'}
++                className={`h-10 w-10 rounded-lg shrink-0 p-0 flex items-center justify-center transition-all duration-200 ${
++                  voiceReplyEnabled
++                    ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
++                    : 'bg-zinc-800 border border-white/10 text-zinc-500 hover:bg-zinc-700 hover:text-zinc-400'
++                }`}
++              >
++                {voiceReplyEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
++              </Button>
++            )}
++
++            {/* Stop Speaking Button — visible only during TTS playback */}
++            {isSpeaking && (
++              <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.8, opacity: 0 }}>
++                <Button
++                  type="button"
++                  onClick={stopSpeaking}
++                  title="Stop speaking"
++                  className="h-10 w-10 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20 shrink-0 p-0 flex items-center justify-center transition-all duration-200"
++                >
++                  <Square className="w-3.5 h-3.5 fill-current" />
++                </Button>
++              </motion.div>
++            )}
++
++            {/* Mic Button */}
++            {sttSupported && (
++              <Button
++                type="button"
++                onClick={toggleMic}
++                disabled={isLoading}
++                title={isListening ? 'Stop listening' : 'Start voice input'}
++                className={`h-10 w-10 rounded-lg shrink-0 p-0 flex items-center justify-center transition-all duration-200 ${
++                  isListening
++                    ? 'bg-red-500/20 border border-red-500/40 text-red-400 hover:bg-red-500/30 animate-pulse'
++                    : 'bg-zinc-800 border border-white/10 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200 disabled:opacity-50'
++                }`}
++              >
++                {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
++              </Button>
++            )}
++
+             <Input
+               value={input}
+               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
+-              placeholder="Message EchoMind..."
++              placeholder={isListening ? 'Listening... speak now' : 'Message EchoMind...'}
+               className="flex-1 h-12 px-5 rounded-lg border-white/10 bg-zinc-900 text-white placeholder:text-zinc-600 focus-visible:ring-1 focus-visible:ring-zinc-700 focus-visible:ring-offset-0 focus-visible:bg-zinc-800 text-base transition-colors"
+               disabled={isLoading}
+             />
