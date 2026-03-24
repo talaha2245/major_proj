@@ -1,12 +1,14 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Cpu, Wrench, Globe, CloudRain, Newspaper, Clock, ScanLine, LineChart, GraduationCap, Mail, Inbox } from 'lucide-react';
+import { Send, Cpu, Wrench, Globe, CloudRain, Newspaper, Clock, ScanLine, LineChart, GraduationCap, Mail, Inbox, Zap, MessageSquare, Brain, Mic, MicOff, Volume2, VolumeX, Square } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAtomValue } from 'jotai';
 import { userAtom, googleCredentialsAtom } from '@/store';
+import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
+import { useSpeechSynthesis } from '@/hooks/useSpeechSynthesis';
 
 export interface Message {
   id: string;
@@ -39,7 +41,35 @@ export default function ChatPage() {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [chatMode, setChatMode] = useState<'fast' | 'normal' | 'deep'>('fast');
+  const [voiceReplyEnabled, setVoiceReplyEnabled] = useState(true);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Voice hooks
+  const { speak, stop: stopSpeaking, isSpeaking, isSupported: ttsSupported } = useSpeechSynthesis();
+
+  const handleSpeechResult = useCallback((transcript: string) => {
+    setInput(prev => (prev ? prev + ' ' : '') + transcript);
+  }, []);
+
+  const {
+    isListening,
+    isSupported: sttSupported,
+    error: sttError,
+    startListening,
+    stopListening,
+  } = useSpeechRecognition({
+    onResult: handleSpeechResult,
+  });
+
+  const toggleMic = () => {
+    if (isListening) {
+      stopListening();
+    } else {
+      if (isSpeaking) stopSpeaking();
+      startListening();
+    }
+  };
 
   useEffect(() => {
     if (scrollContainerRef.current) {
@@ -56,6 +86,9 @@ export default function ChatPage() {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
 
+    if (isListening) stopListening();
+    if (isSpeaking) stopSpeaking();
+
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -67,31 +100,93 @@ export default function ChatPage() {
     setIsLoading(true);
 
     try {
-      // Gather last 3 messages for context awareness
-      const last3Messages = messages.slice(-3).map(m => ({ role: m.role, content: m.content }));
+      // Gather messages for context awareness based on selected mode
+      let historyToSend: { role: string, content: string }[] = [];
+      if (chatMode === 'fast') {
+        historyToSend = []; // Send no previous contextual messages
+      } else if (chatMode === 'normal') {
+        historyToSend = messages.slice(-2).map(m => ({ role: m.role, content: m.content })); // 1 previous interaction pair
+      } else if (chatMode === 'deep') {
+        historyToSend = messages.slice(-10).map(m => ({ role: m.role, content: m.content })); // Up to 5 previous pairs
+      }
 
+      // https://myapp-backend-2-p1nh.onrender.com
+      // https://my-backend1-6q8j.onrender.com
       const response = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           query: userMessage.content,
-          history: last3Messages,
-          google_credentials: googleCredentials
+          history: historyToSend,
+          google_credentials: googleCredentials,
+          mode: chatMode
         }),
       });
 
       if (!response.ok) throw new Error('Network response was not ok');
+      if (!response.body) throw new Error('No response body');
 
-      const data = await response.json();
-      
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: data.response || "No response generated.",
-        tools_used: data.tools_used || [],
-      };
+      const assistantId = (Date.now() + 1).toString();
 
-      setMessages((prev) => [...prev, assistantMessage]);
+      // Seed empty assistant message to stream into
+      setMessages((prev) => [
+        ...prev,
+        { id: assistantId, role: 'assistant', content: '', tools_used: [] }
+      ]);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let done = false;
+      let buffer = '';
+      let fullAssistantText = '';
+
+      while (!done) {
+        const { value, done: readerDone } = await reader.read();
+        done = readerDone;
+        if (value) {
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || ''; // Keep the incomplete line in the buffer for the next chunk
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6).trim();
+              if (!dataStr) continue;
+
+              try {
+                const parsed = JSON.parse(dataStr);
+
+                if (parsed.type === 'token') {
+                  fullAssistantText += parsed.content;
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantId
+                      ? { ...msg, content: msg.content + parsed.content }
+                      : msg
+                  ));
+                } else if (parsed.type === 'tool') {
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantId
+                      ? { ...msg, tools_used: [...(msg.tools_used || []), parsed.name] }
+                      : msg
+                  ));
+                } else if (parsed.type === 'error') {
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantId
+                      ? { ...msg, content: msg.content + '\n\n**Error:** ' + parsed.content }
+                      : msg
+                  ));
+                }
+              } catch (e) {
+                console.error("Error parsing SSE JSON:", dataStr, e);
+              }
+            }
+          }
+        }
+      }
+
+      if (voiceReplyEnabled && ttsSupported && fullAssistantText) {
+        speak(fullAssistantText);
+      }
     } catch (error) {
       console.error('Error fetching chat response:', error);
       const errorMessage: Message = {
@@ -106,7 +201,7 @@ export default function ChatPage() {
   };
 
   return (
-    <motion.div 
+    <motion.div
       key="chat"
       initial={{ opacity: 0, y: 5 }}
       animate={{ opacity: 1, y: 0 }}
@@ -121,8 +216,8 @@ export default function ChatPage() {
           {AVAILABLE_TOOLS.map((tool) => {
             const Icon = tool.icon;
             return (
-              <div 
-                key={tool.id} 
+              <div
+                key={tool.id}
                 className="flex items-center gap-3 p-3 rounded-lg border border-white/5 bg-zinc-900/50 hover:bg-zinc-800/50 transition-colors"
               >
                 <Icon className="w-4 h-4 text-zinc-400" />
@@ -149,15 +244,13 @@ export default function ChatPage() {
                   key={message.id}
                   initial={{ opacity: 0, y: 5 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className={`flex items-start gap-4 ${
-                    message.role === 'user' ? 'flex-row-reverse' : 'flex-row'
-                  }`}
+                  className={`flex items-start gap-4 ${message.role === 'user' ? 'flex-row-reverse' : 'flex-row'
+                    }`}
                 >
-                  <div className={`mt-1 w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center overflow-hidden border ${
-                    message.role === 'user' 
-                      ? 'bg-zinc-100 border-zinc-200' 
+                  <div className={`mt-1 w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center overflow-hidden border ${message.role === 'user'
+                      ? 'bg-zinc-100 border-zinc-200'
                       : 'bg-black border-white/10'
-                  }`}>
+                    }`}>
                     {message.role === 'user' ? (
                       user?.picture ? (
                         <img src={user.picture} alt="User" className="w-full h-full object-cover" />
@@ -168,7 +261,7 @@ export default function ChatPage() {
                       <img src="/avatar.png" alt="EchoMind" className="w-full h-full object-cover" />
                     )}
                   </div>
-                  
+
                   <div className="flex flex-col gap-2 max-w-[85%] min-w-0">
                     {/* Tool Usage Badge */}
                     {message.role === 'assistant' && message.tools_used && message.tools_used.length > 0 && (
@@ -187,11 +280,10 @@ export default function ChatPage() {
                     )}
 
                     <div
-                      className={`px-5 py-3.5 text-[15px] leading-relaxed shadow-sm overflow-hidden ${
-                        message.role === 'user'
+                      className={`px-5 py-3.5 text-[15px] leading-relaxed shadow-sm overflow-hidden ${message.role === 'user'
                           ? 'bg-zinc-100 text-black rounded-2xl rounded-tr-sm font-medium shadow-white/5 whitespace-pre-wrap break-words'
                           : 'bg-black/80 backdrop-blur-md text-zinc-300 rounded-2xl rounded-tl-sm border border-white/5 prose prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-zinc-950 prose-pre:border prose-pre:border-white/10 prose-strong:text-zinc-100 placeholder:text-zinc-500 break-words'
-                      }`}
+                        }`}
                     >
                       {message.role === 'user' ? (
                         <p className="break-words">{message.content}</p>
@@ -207,16 +299,16 @@ export default function ChatPage() {
                 </motion.div>
               ))}
             </AnimatePresence>
-            
-            
+
+
             {isLoading && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, y: 5 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="flex items-start gap-4"
               >
                 <div className="mt-1 w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center overflow-hidden border bg-black border-white/10">
-                   <img src="/avatar.png" alt="EchoMind" className="w-full h-full object-cover opacity-50 pulse-anim" />
+                  <img src="/avatar.png" alt="EchoMind" className="w-full h-full object-cover opacity-50 pulse-anim" />
                 </div>
                 <div className="px-5 py-3.5 rounded-2xl bg-zinc-900 border border-white/5 rounded-tl-sm flex items-center gap-3">
                   <div className="flex gap-1">
@@ -229,16 +321,117 @@ export default function ChatPage() {
             )}
           </div>
         </div>
-        
-        <div className="p-4 bg-[#0a0a0a] border-t border-white/5 shrink-0">
-          <form onSubmit={handleSubmit} className="flex items-center gap-3 max-w-4xl mx-auto">
-            <Input
-              value={input}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
-              placeholder="Message EchoMind..."
-              className="flex-1 h-12 px-5 rounded-lg border-white/10 bg-zinc-900 text-white placeholder:text-zinc-600 focus-visible:ring-1 focus-visible:ring-zinc-700 focus-visible:ring-offset-0 focus-visible:bg-zinc-800 text-base transition-colors"
-              disabled={isLoading}
-            />
+
+        <div className="p-4 bg-[#0a0a0a] border-t border-white/5 shrink-0 flex flex-col gap-3 relative">
+          <AnimatePresence>
+            {sttError && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="absolute -top-10 left-1/2 -translate-x-1/2 bg-red-500/10 border border-red-500/20 text-red-400 px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 shadow-lg backdrop-blur-md z-10"
+              >
+                <span>⚠</span>
+                <span>{sttError}</span>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          {/* Mode Selector */}
+          <div className="flex items-center justify-center gap-2 max-w-4xl mx-auto w-full">
+            <button
+              type="button"
+              onClick={() => setChatMode('fast')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${chatMode === 'fast'
+                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                  : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800 border border-transparent'
+                }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              Quick Reply
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatMode('normal')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${chatMode === 'normal'
+                  ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                  : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800 border border-transparent'
+                }`}
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              Standard
+            </button>
+            <button
+              type="button"
+              onClick={() => setChatMode('deep')}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${chatMode === 'deep'
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                  : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800 border border-transparent'
+                }`}
+            >
+              <Brain className="w-3.5 h-3.5" />
+              Deep Research
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmit} className="flex items-center gap-3 max-w-4xl mx-auto w-full">
+            <div className="relative flex-1 flex items-center group">
+              {ttsSupported && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (voiceReplyEnabled && isSpeaking) stopSpeaking();
+                    setVoiceReplyEnabled(!voiceReplyEnabled);
+                  }}
+                  className={`absolute left-3 p-1.5 transition-colors z-10 outline-none focus:ring-1 focus:ring-white/20 rounded ${
+                    voiceReplyEnabled ? 'text-zinc-400 hover:text-white' : 'text-zinc-600 hover:text-zinc-400'
+                  }`}
+                  title={voiceReplyEnabled ? 'Voice reply ON' : 'Voice reply OFF'}
+                >
+                  {voiceReplyEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                </button>
+              )}
+              
+              <Input
+                value={input}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setInput(e.target.value)}
+                placeholder={isListening ? "Listening..." : "Message EchoMind..."}
+                className={`flex-1 h-12 ${ttsSupported ? 'pl-11' : 'px-5'} ${sttSupported ? 'pr-20' : ''} rounded-lg border-white/10 bg-zinc-900 text-white placeholder:text-zinc-600 focus-visible:ring-1 focus-visible:ring-zinc-700 focus-visible:ring-offset-0 focus-visible:bg-zinc-800 text-base transition-colors relative z-0`}
+                disabled={isLoading}
+              />
+
+              {isSpeaking && (
+                <div className="absolute right-12 flex items-center gap-1.5 z-10 px-2 py-1 bg-zinc-800/80 rounded border border-white/5 shadow-sm">
+                   <div className="flex items-end gap-0.5 h-3">
+                      <span className="w-0.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: '40%', animationDelay: '0ms' }} />
+                      <span className="w-0.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: '80%', animationDelay: '150ms' }} />
+                      <span className="w-0.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: '60%', animationDelay: '300ms' }} />
+                      <span className="w-0.5 bg-emerald-400 rounded-full animate-pulse" style={{ height: '100%', animationDelay: '450ms' }} />
+                    </div>
+                  <button
+                    type="button"
+                    onClick={stopSpeaking}
+                    className="ml-1 text-zinc-400 hover:text-red-400 transition-colors outline-none"
+                    title="Stop speaking"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                  </button>
+                </div>
+              )}
+
+              {sttSupported && (
+                <button
+                  type="button"
+                  onClick={toggleMic}
+                  className={`absolute right-3 p-1.5 transition-colors z-10 outline-none focus:ring-1 focus:ring-white/20 rounded ${
+                    isListening ? 'text-red-500 animate-pulse' : 'text-zinc-500 hover:text-zinc-300'
+                  }`}
+                  title={isListening ? 'Stop listening' : 'Start voice input'}
+                >
+                  {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                </button>
+              )}
+            </div>
+
             <Button
               type="submit"
               disabled={!input.trim() || isLoading}

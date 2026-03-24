@@ -28,10 +28,8 @@ def test_chat_endpoint_valid_schema_but_no_api_key(monkeypatch):
     })
     
     assert response.status_code == 200
-    data = response.json()
-    assert "response" in data
-    assert "tools_used" in data
-    assert "GROQ_API_KEY is not set" in data["response"]
+    text = response.text
+    assert "GROQ_API_KEY is not set" in text
 
 def test_chat_endpoint_with_history(monkeypatch):
     """Test standard array validation mapping string history into correct objects"""
@@ -41,7 +39,7 @@ def test_chat_endpoint_with_history(monkeypatch):
         "history": [{"role": "user", "content": "Prev message"}]
     })
     assert response.status_code == 200
-    assert "GROQ_API_KEY is not set" in response.json()["response"]
+    assert "GROQ_API_KEY is not set" in response.text
 
 def test_auth_google_missing_code():
     """Verify auth endpoint guards against empty payloads"""

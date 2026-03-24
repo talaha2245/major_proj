@@ -1,4 +1,5 @@
 import os
+import json
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -19,19 +20,20 @@ from tools.gmail_tool import create_read_emails_tool, create_send_email_tool
 
 load_dotenv()
 
-def get_agent_response(query: str, history: list = None, google_credentials: dict = None) -> dict:
+async def get_agent_response_stream(query: str, history: list = None, google_credentials: dict = None, mode: str = "normal"):
     """
     Initializes the agent with the Groq model and available tools,
-    then executes the query using robust tool calling.
-    Returns a dictionary with the final 'response' and a list of 'tools_used'.
+    and yields Server-Sent Events (SSE) representing tokens and tool usage.
     """
     groq_api_key = os.getenv("GROQ_API_KEY")
     if not groq_api_key or groq_api_key == "your_groq_api_key_here":
-        return {"response": "Error: GROQ_API_KEY is not set or is invalid in the environment variables.", "tools_used": []}
+        yield f"data: {json.dumps({'type': 'error', 'content': 'GROQ_API_KEY is not set.'})}\n\n"
+        return
 
     llm = ChatGroq(
         groq_api_key=groq_api_key, 
-        model_name="llama-3.1-8b-instant",
+        model_name="openai/gpt-oss-120b",
+        streaming=False,
         temperature=1.0
     )
 
@@ -41,10 +43,17 @@ def get_agent_response(query: str, history: list = None, google_credentials: dic
         tools.append(create_read_emails_tool(google_credentials))
         tools.append(create_send_email_tool(google_credentials))
 
-    SYSTEM_PROMPT = "You are EchoMind, an elite AI assistant with access to real-time tools: weather, news, search, time clock, webpage scraper, finance tracker, and ArXiv academic paper fetcher. " \
-                    "If you have access to `read_recent_emails` and `send_email`, you are explicitly connected to the user's secure Gmail account. Use those tools to check their inbox or send emails on their behalf! " \
-                    "CRITICAL: You are an advanced agent. For complex queries you MUST use MULTIPLE tools to gather deep context before answering. " \
-                    "Synthesize the vast multi-tool data into a comprehensive, highly-detailed, and friendly Markdown response. Do not end your turn prematurely until you have all the facts!"
+    if mode == "fast":
+        SYSTEM_PROMPT = "You are EchoMind, a lightning-fast assistant. Answer the user's query as concisely and directly as possible. Only use tools if strictly necessary. Do not provide long explanations."
+        max_iters = 5
+    elif mode == "deep":
+        SYSTEM_PROMPT = "You are DeepSearch AI, an elite research assistant. You must execute comprehensive multi-step reasoning using multiple tools simultaneously. Synthesize the vastly gathered data into a comprehensive, highly-detailed Markdown report. Do not end your turn prematurely until you have all the facts!"
+        max_iters = 30
+    else:
+        SYSTEM_PROMPT = "You are EchoMind, an elite AI assistant with access to real-time tools: weather, news, search, time clock, webpage scraper, finance tracker, and ArXiv academic paper fetcher. " \
+                        "If you have access to `read_recent_emails` and `send_email`, you are explicitly connected to the user's secure Gmail account. Use those tools to check their inbox or send emails on their behalf! " \
+                        "CRITICAL: For complex queries you MUST use MULTIPLE tools to gather deep context before answering. Synthesize data into a comprehensive and friendly Markdown response."
+        max_iters = 15
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
@@ -82,7 +91,7 @@ def get_agent_response(query: str, history: list = None, google_credentials: dic
         tools=tools, 
         verbose=True,
         return_intermediate_steps=True,
-        max_iterations=8,
+        max_iterations=max_iters,
         handle_parsing_errors=True
     )
 
@@ -96,35 +105,23 @@ def get_agent_response(query: str, history: list = None, google_credentials: dic
                 formatted_history.append(AIMessage(content=msg.get("content", "")))
 
     try:
-        response_data = None
-        # Robust 3-attempt retry loop to handle transient LLM JSON parsing crashes (e.g. NoneType object has no attribute 'get' deep in LangChain).
-        for attempt in range(3):
-            try:
-                response_data = agent_executor.invoke({
-                    "input": query,
-                    "chat_history": formatted_history
-                })
-                if response_data:
-                    break
-            except Exception as e:
-                if attempt == 2:
-                    raise e
-                
-        if not response_data:
-            response_data = {}
+        async for event in agent_executor.astream_events(
+            {"input": query, "chat_history": formatted_history},
+            version="v2"
+        ):
+            kind = event.get("event")
             
-        output = response_data.get("output", "No response generated.") if isinstance(response_data, dict) else str(response_data)
-        
-        # Extract tools used from intermediate steps
-        intermediate_steps = response_data.get("intermediate_steps", []) if isinstance(response_data, dict) else []
-        tools_used = []
-        for action, observation in intermediate_steps:
-            if hasattr(action, "tool"):
-                tools_used.append(action.tool)
-                
-        # Deduplicate tools
-        tools_used = list(dict.fromkeys(tools_used))
-        
-        return {"response": output, "tools_used": tools_used}
+            # Stream actual response tokens
+            if kind == "on_chat_model_stream":
+                chunk_msg = event.get("data", {}).get("chunk")
+                if chunk_msg and chunk_msg.content and isinstance(chunk_msg.content, str):
+                    yield f"data: {json.dumps({'type': 'token', 'content': chunk_msg.content})}\n\n"
+            
+            # Identify when a tool is called
+            elif kind == "on_tool_start":
+                tool_name = event.get("name")
+                if tool_name and tool_name not in ["_Exception"]:
+                    yield f"data: {json.dumps({'type': 'tool', 'name': tool_name})}\n\n"
+                    
     except Exception as e:
-        return {"response": f"An error occurred while processing your request: {e}", "tools_used": []}
+        yield f"data: {json.dumps({'type': 'error', 'content': f'An error occurred: {str(e)}'})}\n\n"
