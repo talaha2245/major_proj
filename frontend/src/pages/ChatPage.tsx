@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Send, Cpu, Wrench, Globe, CloudRain, Newspaper, Clock, ScanLine, LineChart, GraduationCap, Mail, Inbox, Zap, MessageSquare, Brain } from 'lucide-react';
+import { Send, Cpu, Wrench, Globe, CloudRain, Newspaper, Clock, ScanLine, LineChart, GraduationCap, Mail, Inbox, Zap, MessageSquare, Brain, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
+import { useSpeechRecognition } from '@/lib/useSpeechRecognition';
+import { useSpeechSynthesis } from '@/lib/useSpeechSynthesis';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -41,6 +43,22 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [chatMode, setChatMode] = useState<'fast' | 'normal' | 'deep'>('fast');
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const lastSpokenId = useRef<string | null>(null);
+
+  const { isListening, startListening, stopListening } = useSpeechRecognition((text) => setInput(text));
+  const { isVoiceEnabled, toggleVoice, speak } = useSpeechSynthesis();
+
+  useEffect(() => {
+    if (!isLoading && messages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage.role === 'assistant' && lastMessage.id !== lastSpokenId.current && isVoiceEnabled) {
+        // Strip markdown before speaking for better TTS quality
+        const plainText = lastMessage.content.replace(/[#*_~`\[\]()]/g, '');
+        speak(plainText);
+        lastSpokenId.current = lastMessage.id;
+      }
+    }
+  }, [isLoading, messages, isVoiceEnabled, speak]);
 
   useEffect(() => {
     if (scrollContainerRef.current) {
@@ -320,6 +338,17 @@ export default function ChatPage() {
               <Brain className="w-3.5 h-3.5" />
               Deep Research
             </button>
+            <button
+              type="button"
+              onClick={toggleVoice}
+              className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-semibold transition-all ${isVoiceEnabled
+                  ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+                  : 'bg-zinc-900 text-zinc-500 hover:bg-zinc-800 border border-transparent'
+                }`}
+            >
+              {isVoiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+              Voice {isVoiceEnabled ? 'On' : 'Off'}
+            </button>
           </div>
 
           <form onSubmit={handleSubmit} className="flex items-center gap-3 max-w-4xl mx-auto w-full">
@@ -330,6 +359,17 @@ export default function ChatPage() {
               className="flex-1 h-12 px-5 rounded-lg border-white/10 bg-zinc-900 text-white placeholder:text-zinc-600 focus-visible:ring-1 focus-visible:ring-zinc-700 focus-visible:ring-offset-0 focus-visible:bg-zinc-800 text-base transition-colors"
               disabled={isLoading}
             />
+            <Button
+              type="button"
+              onClick={isListening ? stopListening : startListening}
+              className={`h-12 w-12 rounded-lg transition-all shrink-0 p-0 flex items-center justify-center border border-white/5 ${isListening 
+                  ? 'bg-red-500/20 text-red-500 border-red-500/30 animate-pulse' 
+                  : 'bg-zinc-900 text-zinc-400 hover:text-white hover:bg-zinc-800'
+                }`}
+              disabled={isLoading}
+            >
+              {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            </Button>
             <Button
               type="submit"
               disabled={!input.trim() || isLoading}
