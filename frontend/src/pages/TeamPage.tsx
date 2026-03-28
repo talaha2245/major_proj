@@ -20,9 +20,9 @@ export default function TeamPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full px-4">
             {[
-              { name: 'Rajcharan', role: 'Full Stack Engineer', desc: 'Expert in React, Vite frameworks, component systems, and UI execution.', image: '/rajcharan.jpg', linkedin: 'https://www.linkedin.com/in/raj-charan-vanga-05b249255' },
-              { name: 'Bandi Naresh', role: 'AI & Systems Architect', desc: 'Specialist in Vector DB integrations, LangChain orchestration and core Python API logic.', image: '/naresh.jpg', linkedin: 'https://www.linkedin.com/in/bandi-naresh' },
-              { name: 'Talah Hanuman', role: 'Lead Developer', desc: 'Overseeing global platform vision, highly-scalable backend structures, and Vercel routing.', image: '/talah.jpg', linkedin: 'https://www.linkedin.com/in/talaha-numan-4bb92a28b' }
+              { name: 'Rajcharan', role: 'Full Stack Engineer', desc: 'Expert in React, Vite frameworks, component systems, and UI execution.', image: 'public/rajcharan.png', linkedin: 'https://www.linkedin.com/in/raj-charan-vanga-05b249255' },
+              { name: 'Bandi Naresh', role: 'AI & Systems Architect', desc: 'Specialist in Vector DB integrations, LangChain orchestration and core Python API logic.', image: 'public/naresh.png', linkedin: 'https://www.linkedin.com/in/bandi-naresh' },
+              { name: 'Talaha numan', role: 'Lead Developer', desc: 'Overseeing global platform vision, highly-scalable backend structures, and Vercel routing.', image: 'public/talah.png', linkedin: 'https://www.linkedin.com/in/talaha-numan-4bb92a28b' }
             ].map((member, i) => (
               <motion.div
                 key={member.name}

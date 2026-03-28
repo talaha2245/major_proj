@@ -98,7 +98,7 @@ export default function ChatPage() {
 
       // https://myapp-backend-2-p1nh.onrender.com
       // https://my-backend1-6q8j.onrender.com
-      const response = await fetch('https://my-backend1-6q8j.onrender.com/api/chat', {
+      const response = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

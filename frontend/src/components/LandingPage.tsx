@@ -26,7 +26,7 @@ export default function LandingPage() {
     scope: 'openid email profile https://www.googleapis.com/auth/gmail.modify',
     onSuccess: async (codeResponse) => {
       try {
-        const res = await fetch('https://my-backend1-6q8j.onrender.com/api/auth/google', {
+        const res = await fetch('http://localhost:8000/api/auth/google', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ code: codeResponse.code })
