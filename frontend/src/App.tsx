@@ -11,7 +11,7 @@ function App() {
   useEffect(() => {
     console.log('request has been sent ')
     const intreval = setInterval(() => {
-      axios.get("https://my-backend1-6q8j.onrender.com/").then((res) => {
+      axios.get("https://my-backend1-6q8j.onrender.com/").then(() => {
         console.log('sucess')
       })
     }, 10 * 60 * 1000);
