@@ -25,6 +25,7 @@ async def get_agent_response_stream(query: str, history: list = None, google_cre
     Initializes the agent with the Groq model and available tools,
     and yields Server-Sent Events (SSE) representing tokens and tool usage.
     """
+    # handle thsi error 
     groq_api_key = os.getenv("GROQ_API_KEY")
     if not groq_api_key or groq_api_key == "your_groq_api_key_here":
         yield f"data: {json.dumps({'type': 'error', 'content': 'GROQ_API_KEY is not set.'})}\n\n"
@@ -47,8 +48,9 @@ async def get_agent_response_stream(query: str, history: list = None, google_cre
         SYSTEM_PROMPT = "You are EchoMind, a lightning-fast assistant. Answer the user's query as concisely and directly as possible. Only use tools if strictly necessary. Do not provide long explanations."
         max_iters = 5
     elif mode == "deep":
-        SYSTEM_PROMPT = "You are DeepSearch AI, an elite research assistant. You must execute comprehensive multi-step reasoning using multiple tools simultaneously. Synthesize the vastly gathered data into a comprehensive, highly-detailed Markdown report. Do not end your turn prematurely until you have all the facts!"
+        SYSTEM_PROMPT = "You are DeepSearch AI, an elite research assistant. You must execute comprehensive multi-step reasoning using multiple tools simultaneously. Synthesize the vastly gathered data into a comprehensive, crete porper report and at last give the conclusion of your research. Do not end your turn prematurely until you have all the facts!"
         max_iters = 30
+    # this is medium prot 
     else:
         SYSTEM_PROMPT = "You are EchoMind, an elite AI assistant with access to real-time tools: weather, news, search, time clock, webpage scraper, finance tracker, and ArXiv academic paper fetcher. " \
                         "If you have access to `read_recent_emails` and `send_email`, you are explicitly connected to the user's secure Gmail account. Use those tools to check their inbox or send emails on their behalf! " \

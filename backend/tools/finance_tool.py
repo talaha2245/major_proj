@@ -1,6 +1,7 @@
 from langchain.tools import tool
 import yfinance as yf
 
+# this toll is used to fetch real-time financial data for stocks and cryptocurrencies using the yfinance library. It provides current price, day high/low, and a brief summary of the company or crypto.
 @tool
 def finance_tool(ticker: str) -> str:
     """
